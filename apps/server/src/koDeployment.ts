@@ -8,4 +8,4 @@ export const KoManagedDeployment = Context.Reference<boolean>("t3/KoManagedDeplo
   defaultValue: () => isKoBuild,
 });
 export const KO_DEPLOYMENT_MESSAGE =
-  "This T3 build is managed by the KO fork. Use the agent-led deployment tools and recovery runbook in nobody0/t3-code-ops; upstream service and update commands would replace the fork deployment.";
+  "This T3 build is managed by the KO fork. Use scripts/manage-ko-release.mjs and the recovery runbook in nobody0/t3-code-ops; upstream service and update commands would replace the fork deployment.";
