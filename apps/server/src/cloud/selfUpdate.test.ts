@@ -8,12 +8,14 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
+import * as Layer from "effect/Layer";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import * as ServerConfig from "../config.ts";
 import * as DesktopAppUpdate from "../desktopUpdate/DesktopAppUpdate.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { KoManagedDeployment } from "../koDeployment.ts";
 import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 import * as ServerSelfUpdate from "./selfUpdate.ts";
@@ -128,7 +130,32 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
   return { selfUpdate, order };
 });
 
-it.layer(NodeServices.layer)("server self update", (it) => {
+const upstreamServices = Layer.merge(NodeServices.layer, Layer.succeed(KoManagedDeployment, false));
+it.layer(upstreamServices)("server self update", (it) => {
+  it.effect("rejects KO-managed self updates before download or launcher handoff", () =>
+    Effect.gen(function* () {
+      const { selfUpdate, order } = yield* makeHarness().pipe(
+        Effect.provideService(KoManagedDeployment, true),
+      );
+      const error = yield* selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip);
+      expect(error.reason).toContain("manage-ko-release.mjs");
+      expect(order).toEqual([]);
+      expect(
+        ServerSelfUpdate.resolveServerSelfUpdateCapability({
+          desktopManaged: false,
+          launcherManaged: true,
+          koManaged: true,
+        }),
+      ).toBeNull();
+      expect(
+        ServerSelfUpdate.resolveServerSelfUpdateCapability({
+          desktopManaged: false,
+          launcherManaged: true,
+          koManaged: false,
+        }),
+      ).toBe("boot-service");
+    }),
+  );
   it.effect("marks running threads at the boot-service handoff", () =>
     Effect.gen(function* () {
       const events: string[] = [];

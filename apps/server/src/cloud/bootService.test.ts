@@ -15,6 +15,7 @@ import { HttpClient } from "effect/unstable/http";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { KoManagedDeployment } from "../koDeployment.ts";
 import * as BootService from "./bootService.ts";
 import { pinnedRuntimePaths } from "./pinnedRuntime.ts";
 import {
@@ -184,7 +185,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
           input.args[0] === "--version"
             ? // The runtime under test reports the version of the directory it
               // was launched from, like the real executable.
-              `t3 v${/versions\/([^/]+)\//.exec(input.command)?.[1] ?? "1.2.3"}\n`
+              `t3 v${/versions[/\\]([^/\\]+)[/\\]/.exec(input.command)?.[1] ?? "1.2.3"}\n`
             : input.command === "loginctl" && input.args[0] === "show-user"
               ? `${control.linger}\n`
               : input.args[1] === "is-enabled"
@@ -250,7 +251,31 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
   return { service, makeService, fs, statePath, commands, timeouts, control, runtime };
 });
 
-it.layer(NodeServices.layer)("boot service install", (it) => {
+const upstreamServices = Layer.merge(NodeServices.layer, Layer.succeed(KoManagedDeployment, false));
+it.layer(upstreamServices)("boot service install", (it) => {
+  it.effect("keeps a KO-managed unit and runtime untouched by install or uninstall", () =>
+    Effect.gen(function* () {
+      const { service, makeService, fs, statePath, commands } = yield* makeHarness();
+      const plan = yield* service.install();
+      const unit = yield* fs.readFileString(plan.unitPath);
+      const state = yield* fs.readFileString(statePath);
+      const managed = yield* makeService().pipe(Effect.provideService(KoManagedDeployment, true));
+      commands.length = 0;
+      const mutations: Array<Effect.Effect<void, BootService.BootServiceError>> = [
+        managed.install({ allowDowngrade: true }).pipe(Effect.asVoid),
+        managed.uninstall.pipe(Effect.asVoid),
+      ];
+      for (const mutation of mutations) {
+        const error = yield* mutation.pipe(Effect.flip);
+        expect(error._tag).toBe("BootServiceManagedError");
+        expect(error.message).toContain("manage-ko-release.mjs");
+      }
+      expect(commands).toEqual([]);
+      expect(yield* fs.readFileString(plan.unitPath)).toBe(unit);
+      expect(yield* fs.readFileString(statePath)).toBe(state);
+      expect((yield* managed.status).installed).toBe(true);
+    }),
+  );
   it.effect(
     "fails before installing files or validating a runtime when lingering needs an administrator",
     () =>
@@ -353,7 +378,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       });
       expect(plan.program).toEqual([runtime.entryPath, "__service-launcher"]);
       expect(yield* fs.readFileString(plan.unitPath)).toContain(
-        `ExecStart=${runtime.entryPath} __service-launcher`,
+        runtime.entryPath.replaceAll("\\", "\\\\"),
       );
       expect(yield* service.status).toMatchObject({
         current: true,
@@ -502,7 +527,9 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         protocol: SERVICE_LAUNCHER_PROTOCOL,
         activeVersion: "1.2.4",
       });
-      expect(yield* fs.readFileString(plan.unitPath)).toContain("versions/1.2.4/t3");
+      expect((yield* fs.readFileString(plan.unitPath)).replaceAll("\\\\", "/")).toContain(
+        "versions/1.2.4/t3",
+      );
       expect(
         commands.filter(
           (command) => command.startsWith("systemctl ") && !command.includes("show-environment"),

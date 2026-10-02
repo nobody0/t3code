@@ -271,6 +271,7 @@ export const recoverServiceOnboardingOffer = <R>(
 ) =>
   offer.pipe(
     Effect.catchTags({
+      BootServiceManagedError: (error) => Console.warn(error.message).pipe(Effect.as(false)),
       QuitError: () => Effect.succeed(false),
       BootServiceUnsupportedError: (error) =>
         Console.log(`Skipping background setup: ${error.message}`).pipe(Effect.as(false)),

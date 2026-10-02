@@ -4,6 +4,9 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Layer from "effect/Layer";
+import * as NetService from "@t3tools/shared/Net";
+import { Command } from "effect/unstable/cli";
 import {
   HostProcessEnvironment,
   HostProcessInvokedAs,
@@ -11,7 +14,28 @@ import {
   HostProcessWorkingDirectory,
 } from "@t3tools/shared/hostProcess";
 
-import { repointLauncher, resolveLauncherPath } from "./update.ts";
+import { repointLauncher, resolveLauncherPath, updateCommand } from "./update.ts";
+import { KoManagedDeployment } from "../koDeployment.ts";
+
+it.layer(Layer.merge(NodeServices.layer, NetService.layer))("KO updater protection", (it) => {
+  it.effect("refuses CLI update before creating the home or fetching a release", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ko-update-" });
+      const home = path.join(root, "untouched");
+      const error = yield* Command.runWith(updateCommand, { version: "0.0.42" })([
+        "9.9.9",
+        "--base-dir",
+        home,
+        "--yes",
+      ]).pipe(Effect.provideService(KoManagedDeployment, true), Effect.flip);
+      assert.equal(error._tag, "CliUpdateError");
+      assert.include(error.message, "manage-ko-release.mjs");
+      assert.equal(yield* fs.exists(home), false);
+    }),
+  );
+});
 
 it.layer(NodeServices.layer)("t3 update launcher", (it) => {
   it.effect("repoints a symlink that lives in a runtime versions tree", () =>
@@ -78,6 +102,7 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+      const platform = yield* HostProcessPlatform;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
       const launcher = path.join(root, "bin/t3");
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
@@ -86,7 +111,9 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       const bare = yield* resolveLauncherPath.pipe(
         Effect.provideService(HostProcessInvokedAs, "t3"),
         Effect.provideService(HostProcessEnvironment, {
-          PATH: `${path.join(root, "missing")}:${path.join(root, "bin")}`,
+          PATH: [path.join(root, "missing"), path.join(root, "bin")].join(
+            platform === "win32" ? ";" : ":",
+          ),
         }),
         Effect.provideService(HostProcessWorkingDirectory, root),
       );
@@ -104,6 +131,6 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       assert.equal(bare, launcher);
       assert.equal(relative, launcher);
       assert.equal(absent, undefined);
-    }).pipe(Effect.scoped, Effect.provideService(HostProcessPlatform, "linux")),
+    }).pipe(Effect.scoped),
   );
 });

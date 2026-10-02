@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 import { CLI_RELEASE_BASE_URL_ENV } from "@t3tools/shared/cliRelease";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { KoManagedDeployment, KO_DEPLOYMENT_MESSAGE } from "../koDeployment.ts";
 import {
   ensurePinnedRuntimeInstalled,
   pinnedRuntimeCommand,
@@ -499,7 +500,17 @@ export class BootServiceDowngradeRefusedError extends Schema.TaggedError<BootSer
   }
 }
 
+export class BootServiceManagedError extends Schema.TaggedError<BootServiceManagedError>()(
+  "BootServiceManagedError",
+  {},
+) {
+  override get message(): string {
+    return KO_DEPLOYMENT_MESSAGE;
+  }
+}
+
 export type BootServiceError =
+  | BootServiceManagedError
   | BootServiceUnsupportedError
   | BootServiceCommandError
   | BootServiceInstallError
@@ -559,6 +570,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   readonly host?: BootServiceHost;
 }) {
   const hostExecPath = yield* HostProcessExecutablePath;
+  const koManaged = yield* KoManagedDeployment;
   const platform = yield* HostProcessPlatform;
   const arch = yield* HostProcessArchitecture;
   const uid = yield* HostProcessUserId;
@@ -750,6 +762,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     readonly allowDowngrade?: boolean;
     readonly start?: boolean;
   }) {
+    if (koManaged) return yield* new BootServiceManagedError({});
     const manager = yield* requireManager;
     yield* fs
       .makeDirectory(input.logsDir, { recursive: true })
@@ -928,6 +941,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   );
 
   const uninstall: BootService["Service"]["uninstall"] = Effect.gen(function* () {
+    if (koManaged) return yield* new BootServiceManagedError({});
     const manager = yield* requireManager;
     if (
       !(yield* fs

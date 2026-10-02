@@ -25,6 +25,7 @@ import { CLI_RELEASE_BASE_URL_ENV } from "@t3tools/shared/cliRelease";
 import * as ServerConfig from "../config.ts";
 import * as DesktopAppUpdate from "../desktopUpdate/DesktopAppUpdate.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { isKoBuild, KoManagedDeployment, KO_DEPLOYMENT_MESSAGE } from "../koDeployment.ts";
 import {
   ensurePinnedRuntimeInstalled,
   pinnedRuntimeCommand,
@@ -40,7 +41,9 @@ const PREFLIGHT_TIMEOUT = Duration.seconds(30);
 export function resolveServerSelfUpdateCapability(input: {
   readonly desktopManaged: boolean;
   readonly launcherManaged: boolean;
+  readonly koManaged?: boolean;
 }): ServerSelfUpdateCapability | null {
+  if (input.koManaged ?? isKoBuild) return null;
   if (input.desktopManaged) return "desktop-managed" as const;
   return input.launcherManaged ? ("boot-service" as const) : null;
 }
@@ -170,6 +173,7 @@ export const withRunningThreadContinuation = Effect.fn(
 });
 
 export const make = Effect.fn("cloud.server_self_update.make")(function* () {
+  const koManaged = yield* KoManagedDeployment;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const desktopAppUpdate = yield* DesktopAppUpdate.DesktopAppUpdate;
   const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
@@ -196,6 +200,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   const update: ServerSelfUpdate["Service"]["update"] = Effect.fn(
     "cloud.server_self_update.update",
   )(function* (input, reportProgress = () => Effect.void, onHandoffAccepted = () => Effect.void) {
+    if (koManaged) return yield* failWith(KO_DEPLOYMENT_MESSAGE);
     if (capability === "desktop-managed") {
       // input.targetVersion is meaningless here: the desktop app's own
       // update feed decides what it downloads, and the result carries what

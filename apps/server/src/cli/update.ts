@@ -31,6 +31,7 @@ import {
 } from "effect/unstable/http";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { KoManagedDeployment, KO_DEPLOYMENT_MESSAGE } from "../koDeployment.ts";
 import * as BootService from "../cloud/bootService.ts";
 import {
   ensurePinnedRuntimeInstalled,
@@ -260,6 +261,9 @@ export const updateCommand = Command.make("update", {
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
+      if (yield* KoManagedDeployment) {
+        return yield* new CliUpdateError({ reason: KO_DEPLOYMENT_MESSAGE });
+      }
       const logLevel = yield* GlobalFlag.LogLevel;
       const config = yield* resolveCliAuthConfig(flags, logLevel);
       return yield* runUpdate({
