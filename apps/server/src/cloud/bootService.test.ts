@@ -493,7 +493,7 @@ it.layer(upstreamServices)("boot service install", (it) => {
           protocol: SERVICE_LAUNCHER_PROTOCOL,
           activeVersion: "1.2.4",
         });
-        expect((yield* fs.readFileString(plan.unitPath)).replaceAll("\\\\", "/")).toContain(
+        expect((yield* fs.readFileString(plan.unitPath)).replace(/\\+/g, "/")).toContain(
           "versions/1.2.4/t3",
         );
         expect(
