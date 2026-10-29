@@ -420,7 +420,26 @@ it.layer(
 
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.auth.status, "unknown");
+        // Custom model providers have no subscription quota to warn about.
+        assert.strictEqual(status.usageLimits?.unavailable?.reason, "unsupported");
       }),
+    );
+
+    it.effect.each(["apiKey", "amazonBedrock"] as const)(
+      "reports usage as unsupported for %s auth",
+      (type) =>
+        Effect.gen(function* () {
+          const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+            Effect.succeed(
+              makeCodexProbeSnapshot({
+                account: { account: { type }, requiresOpenaiAuth: false },
+              }),
+            ),
+          );
+
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.usageLimits?.unavailable?.reason, "unsupported");
+        }),
     );
   });
 
