@@ -1,6 +1,7 @@
 import type {
   EditorId,
   EnvironmentId,
+  ProjectId,
   ProjectScript,
   ResolvedKeybindingsConfig,
   ThreadId,
@@ -21,16 +22,20 @@ import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+import { ThreadServersPanel } from "./ThreadServersPanel";
 
 const GitActionsControl = memo(BaseGitActionsControl);
 
-export interface ThreadDetailsPanelProps extends Pick<
+interface ThreadDetailsPanelProps extends Pick<
   ComponentProps<typeof ThreadDetailsCard>,
-  "anchor" | "handle" | "onPresentationChange"
+  "anchor" | "handle"
 > {
   forceNewWorktree?: boolean;
   environmentId: EnvironmentId;
   threadId: ThreadId;
+  projectId: ProjectId;
+  worktreePath: string | null;
+  isServerThread: boolean;
   draftId?: DraftId;
   activeProjectName: string | undefined;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
@@ -38,15 +43,15 @@ export interface ThreadDetailsPanelProps extends Pick<
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   showOpenInPicker: boolean;
+  openInShortcutEnabled: boolean;
   gitCwd: string | null;
   isGitRepo: boolean;
   envLocked: boolean;
   availableEnvironments: readonly EnvironmentOption[];
   autoEnvironmentLabel?: string | undefined;
   onAutoEnvironment?: (() => void) | undefined;
-  onEnvironmentChange: (environmentId: EnvironmentId) => void;
+  onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   onEnvModeChange: (mode: EnvMode) => void;
-  /** The thread's env mode as ChatView resolves it. */
   envMode: EnvMode;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
@@ -74,6 +79,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     showGitControls: props.isGitRepo,
     environmentId: props.environmentId,
     threadId: props.threadId,
+    projectId: props.projectId,
+    worktreePath: props.worktreePath,
+    isServerThread: props.isServerThread,
     ...(props.draftId ? { draftId: props.draftId } : {}),
     onEnvModeChange: props.onEnvModeChange,
     startFromOrigin: props.startFromOrigin,
@@ -98,7 +106,6 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       threadRef={{ environmentId: props.environmentId, threadId: props.threadId }}
       anchor={props.anchor}
       handle={props.handle}
-      onPresentationChange={props.onPresentationChange}
     >
       {(density) => (
         <>
@@ -114,7 +121,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   layout="panel"
                   panelSection="workspace"
                   availableEnvironments={props.availableEnvironments}
-                  onEnvironmentChange={props.onEnvironmentChange}
+                  {...(props.onEnvironmentChange
+                    ? { onEnvironmentChange: props.onEnvironmentChange }
+                    : {})}
                   autoEnvironmentLabel={props.autoEnvironmentLabel}
                   onAutoEnvironment={props.onAutoEnvironment}
                   {...branchToolbarProps}
@@ -127,6 +136,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   environmentId={props.environmentId}
                   availableEditors={props.availableEditors}
                   openInCwd={props.gitCwd}
+                  enableShortcut={props.openInShortcutEnabled}
                   displayMode="panel"
                 />
               ) : null}
@@ -160,7 +170,6 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ) : null}
                 {props.activeProjectName ? (
                   <GitActionsControl
-                    displayMode="panel"
                     compact={density !== "full"}
                     gitCwd={props.gitCwd}
                     activeThreadRef={activeThreadRef}
@@ -170,6 +179,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ) : null}
               </div>
             </ThreadDetailsSection>
+          ) : null}
+
+          {density === "full" && !props.draftId ? (
+            <ThreadServersPanel environmentId={props.environmentId} threadId={props.threadId} />
           ) : null}
 
           {density === "full" && !props.draftId ? (
