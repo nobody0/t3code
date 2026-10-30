@@ -27,6 +27,7 @@ import {
   compareExactServiceVersions,
   serviceStateActiveVersion,
 } from "./cloud/serviceProtocol.ts";
+import { KoManagedDeployment } from "./koDeployment.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -109,6 +110,8 @@ const legacyOwnerIsLive = Effect.fn("legacyOwnerIsLive")(function* (
 // record. Unreadable configuration or an unavailable manager allows startup.
 const olderBootServiceHome = Effect.fn("olderBootServiceHome")(
   function* (stateDir: string) {
+    // KO reuses the upstream unit name for its own wrapper; no upstream launcher runs it.
+    if (yield* KoManagedDeployment) return undefined;
     if (
       (yield* ServiceLauncherHostProcess).connected &&
       (yield* HostProcess.Environment)[SERVICE_LAUNCHER_CONTEXT_ENV] !== undefined

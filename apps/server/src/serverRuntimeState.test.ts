@@ -12,6 +12,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { renderBootServicePlist, renderBootServiceUnit } from "./cloud/bootService.ts";
 import { ServiceLauncherHostProcess } from "./cloud/serviceLauncherClient.ts";
 import { SERVICE_LAUNCHER_CONTEXT_ENV } from "./cloud/serviceProtocol.ts";
+import { KoManagedDeployment } from "./koDeployment.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as ServerOwnership from "./serverOwnership.ts";
 import * as ServerRuntimeState from "./serverRuntimeState.ts";
@@ -26,6 +27,7 @@ const startBesideBootService = Effect.fn("test.startBesideBootService")(function
   readonly missingServiceState?: boolean;
   readonly environment?: NodeJS.ProcessEnv;
   readonly connected?: boolean;
+  readonly koManaged?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -112,6 +114,7 @@ const startBesideBootService = Effect.fn("test.startBesideBootService")(function
     Effect.provideService(HostProcess.UserId, 501),
     Effect.provideService(HostProcess.HomeDirectory, root),
     Effect.provideService(HostProcess.Environment, input.environment ?? {}),
+    Effect.provideService(KoManagedDeployment, input.koManaged ?? false),
     Effect.provideService(ServiceLauncherHostProcess, {
       connected: input.connected ?? false,
       send: () => false,
@@ -348,6 +351,12 @@ describe("server ownership", () => {
         };
         for (const fixture of [
           { platform: "darwin", outputs, unitServesOtherHome: true },
+          { platform: "darwin", outputs, koManaged: true },
+          {
+            platform: "linux",
+            outputs: { "systemctl is-active": { code: 0, stdout: "active\n" } },
+            koManaged: true,
+          },
           {
             platform: "darwin",
             outputs,
