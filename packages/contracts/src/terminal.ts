@@ -362,6 +362,15 @@ export class TerminalResizeError extends Schema.TaggedError<TerminalResizeError>
   }
 }
 
+export class TerminalMaintenanceError extends Schema.TaggedError<TerminalMaintenanceError>()(
+  "TerminalMaintenanceError",
+  { threadId: Schema.String, terminalId: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {
+  override get message() {
+    return "T3 is draining for managed maintenance. Retry after maintenance completes.";
+  }
+}
+
 export const TerminalError = Schema.Union([
   TerminalCwdError,
   TerminalHistoryError,
@@ -371,5 +380,6 @@ export const TerminalError = Schema.Union([
   TerminalNotRunningError,
   TerminalWriteError,
   TerminalResizeError,
+  TerminalMaintenanceError,
 ]);
 export type TerminalError = typeof TerminalError.Type;

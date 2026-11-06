@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { makeKoAdmission } from "../KoMaintenance.ts";
 import {
   DEFAULT_TERMINAL_ID,
   DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
@@ -17,6 +18,7 @@ import {
   TerminalResizeError,
   TerminalSessionLookupError,
   TerminalWriteError,
+  TerminalMaintenanceError,
   type TerminalAttachInput,
   type TerminalAttachStreamEvent,
   type TerminalClearInput,
@@ -1508,6 +1510,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   options: TerminalManagerOptions,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
+  const withKoAdmission = yield* makeKoAdmission();
   const path = yield* Path.Path;
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
@@ -2952,9 +2955,21 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   });
 
   const openLocked = (input: TerminalOpenInput) =>
-    withWorkspaceLease(
-      path.resolve(input.worktreePath ?? input.cwd),
-      openWithWorkspaceLease(input),
+    withKoAdmission(
+      withWorkspaceLease(
+        path.resolve(input.worktreePath ?? input.cwd),
+        openWithWorkspaceLease(input),
+      ),
+    ).pipe(
+      Effect.mapError((cause) =>
+        cause._tag === "KoMaintenanceError"
+          ? new TerminalMaintenanceError({
+              threadId: input.threadId,
+              terminalId: input.terminalId,
+              cause,
+            })
+          : cause,
+      ),
     );
 
   const open: TerminalManager["Service"]["open"] = (input) =>
@@ -3312,7 +3327,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     );
   };
 
-  const write: TerminalManager["Service"]["write"] = Effect.fn("terminal.write")(function* (input) {
+  const writeInput = Effect.fn("terminal.write")(function* (input: TerminalWriteInput) {
     const terminalId = input.terminalId;
     const session = yield* requireSession(input.threadId, terminalId);
     const process = session.process;
@@ -3335,6 +3350,19 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         }),
     });
   });
+
+  const write: TerminalManager["Service"]["write"] = (input) =>
+    withKoAdmission(writeInput(input)).pipe(
+      Effect.mapError((cause) =>
+        cause._tag === "KoMaintenanceError"
+          ? new TerminalMaintenanceError({
+              threadId: input.threadId,
+              terminalId: input.terminalId,
+              cause,
+            })
+          : cause,
+      ),
+    );
 
   const resizeLocked = Effect.fn("terminal.resize")(function* (
     input: TerminalResizeInput,

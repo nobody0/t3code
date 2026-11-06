@@ -191,6 +191,7 @@ import {
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
+import { makeKoAdmission, startsKoWork } from "../KoMaintenance.ts";
 
 const isMessageQuestionAnswer = Schema.is(
   Schema.Union([TrimmedNonEmptyString, Schema.NonEmptyArray(TrimmedNonEmptyString)]),
@@ -1046,6 +1047,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     );
 
   const fileSystem = yield* FileSystem.FileSystem;
+  const withKoAdmission = yield* makeKoAdmission();
   const path = yield* Path.Path;
   const providerAdapters = yield* ProviderAdapterRegistryV2;
   const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
@@ -1361,7 +1363,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       options: { readonly updateDelegatedCompletionOnly?: boolean } = {},
     ) {
       const withIds = yield* Effect.forEach(events, (event) => makeSystemEvent(event));
-      yield* eventSink.writeWithEffects({ events: withIds, effects, ...options });
+      const write = eventSink.writeWithEffects({ events: withIds, effects, ...options });
+      yield* (startsKoWork(withIds, effects) ? withKoAdmission(write) : write).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorDispatchError({
+              commandId: CommandId.make("command:managed-maintenance"),
+              commandType: "internal-work",
+              cause,
+            }),
+        ),
+      );
     });
 
   const completionDeliveryRun = (
@@ -13673,7 +13685,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       } satisfies OrchestratorV2DispatchResult;
     }
     const acceptedAt = plan.events.at(-1)?.occurredAt ?? (yield* DateTime.now);
-    const committed = yield* eventSink
+    const commit = eventSink
       .commitCommand({
         commandId: command.commandId,
         threadId: commandThreadId(command),
@@ -13699,6 +13711,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
 
+    const committed = yield* (
+      startsKoWork(plan.events, plan.effects) ? withKoAdmission(commit) : commit
+    ).pipe(mapDispatchError(command));
     if (committed.receipt.status === "rejected") {
       return yield* new OrchestratorCommandPreviouslyRejectedError({
         commandId: command.commandId,

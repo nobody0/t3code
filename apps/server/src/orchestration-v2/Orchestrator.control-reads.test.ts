@@ -1,4 +1,8 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import {
   CommandId,
   MessageId,
@@ -60,6 +64,69 @@ const layerTest = Layer.mergeAll(
     ProviderAdapterRegistry.layerFromAdapters([adapter]),
     { databaseLayer: layerDatabase, runEffectWorker: false },
   ),
+);
+
+it.effect("maintenance rejects new threads and turns without recording a permanent rejection", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        const threadId = ThreadId.make("thread:maintenance");
+        const create = {
+          type: "thread.create" as const,
+          commandId: CommandId.make("create-maintenance"),
+          threadId,
+          projectId: ProjectId.make("project:maintenance"),
+          title: "Maintenance",
+          modelSelection,
+          runtimeMode: "full-access" as const,
+          interactionMode: "default" as const,
+          branch: null,
+          worktreePath: null,
+          createdBy: "user" as const,
+          creationSource: "web" as const,
+        };
+        yield* fs.makeDirectory(path.join(directory, "fence"));
+        assert.equal(
+          (yield* orchestrator.dispatch(create).pipe(Effect.flip))._tag,
+          "OrchestratorDispatchError",
+        );
+        assert.isNull(yield* projections.getThreadShell(threadId));
+        yield* fs.remove(path.join(directory, "fence"), { recursive: true });
+        yield* orchestrator.dispatch(create);
+        const message = {
+          type: "message.dispatch" as const,
+          commandId: CommandId.make("message-maintenance"),
+          threadId,
+          messageId: MessageId.make("message-maintenance"),
+          text: "Deferred launch",
+          attachments: [],
+          dispatchMode: { type: "defer_start" as const },
+          createdBy: "agent" as const,
+          creationSource: "mcp" as const,
+        };
+        yield* fs.makeDirectory(path.join(directory, "fence"));
+        assert.equal(
+          (yield* orchestrator.dispatch(message).pipe(Effect.flip))._tag,
+          "OrchestratorDispatchError",
+        );
+        assert.equal((yield* projections.getThreadProjection(threadId)).runs.length, 0);
+        yield* fs.remove(path.join(directory, "fence"), { recursive: true });
+        yield* orchestrator.dispatch(message);
+        assert.equal((yield* projections.getThreadProjection(threadId)).runs.length, 1);
+      }).pipe(
+        Effect.provide(layerTest),
+        Effect.provideService(HostProcess.Environment, {
+          ...process.env,
+          T3_KO_MAINTENANCE_DIR: directory,
+        }),
+      );
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
 );
 
 it.effect(

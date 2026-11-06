@@ -414,6 +414,44 @@ it.layer(
   ),
   { excludeTestServices: true },
 )("TerminalManager", (it) => {
+  it.effect(
+    "maintenance blocks terminal launch, streamed launch and input without killing the existing shell",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped();
+        const { manager, ptyAdapter } = yield* createManager().pipe(
+          Effect.provideService(HostProcess.Environment, {
+            ...process.env,
+            T3_KO_MAINTENANCE_DIR: directory,
+          }),
+        );
+        yield* manager.open(openInput());
+        yield* fs.makeDirectory(path.join(directory, "fence"));
+        const open = yield* manager.open(openInput({ terminalId: "blocked" })).pipe(Effect.flip);
+        assert.equal(open._tag, "TerminalMaintenanceError");
+        const attach = yield* manager
+          .attachStream(openInput({ terminalId: "streamed" }), () => Effect.void)
+          .pipe(Effect.flip);
+        assert.equal(attach._tag, "TerminalMaintenanceError");
+        const write = yield* manager
+          .write({
+            threadId: "thread-1",
+            terminalId: DEFAULT_TERMINAL_ID,
+            data: "do not execute\n",
+          })
+          .pipe(Effect.flip);
+        assert.equal(write._tag, "TerminalMaintenanceError");
+        assert.equal(ptyAdapter.spawnInputs.length, 1);
+        yield* fs.remove(path.join(directory, "fence"), { recursive: true });
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "resumed\n",
+        });
+      }),
+  );
   it.effect("spawns lazily and reuses running terminal per thread", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
