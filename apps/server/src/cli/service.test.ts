@@ -13,6 +13,7 @@ import { afterEach, vi } from "vite-plus/test";
 import packageJson from "../../package.json" with { type: "json" };
 import * as BootService from "../cloud/bootService.ts";
 import { KoManagedDeployment } from "../koDeployment.ts";
+import { resolveHostCliCommand } from "./invocation.ts";
 import { serviceCommand } from "./service.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -81,13 +82,33 @@ it.layer(
       expect(yield* fs.exists(baseDir)).toBe(false);
     }),
   );
-  it.effect.each(["install", "update"] as const)(
-    "%s refuses a downgrade before changing the service",
-    (command) =>
+  it.effect.each(
+    (["install", "update"] as const).flatMap((command) => [
+      {
+        command,
+        label: "a downgrade",
+        status: newerServiceStatus,
+        error: {
+          _tag: "BootServiceDowngradeRefusedError",
+          installedVersion: "999.0.0",
+          targetVersion: packageJson.version,
+        },
+      },
+      // This home's newer state must not ask for --allow-downgrade first.
+      {
+        command,
+        label: "another home's service",
+        status: { ...newerServiceStatus, otherBaseDir: "/srv/t3" },
+        error: { _tag: "BootServiceOtherBaseDirError", installedBaseDir: "/srv/t3" },
+      },
+    ]),
+  )(
+    "$command refuses $label before changing the service",
+    ({ command, status: serviceStatus, error: expected }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-cli-test-" });
-        const { service, installOptions } = makeTestService(newerServiceStatus);
+        const { service, installOptions } = makeTestService(serviceStatus);
         vi.spyOn(BootService, "layer").mockReturnValue(
           Layer.succeed(BootService.BootService, service),
         );
@@ -102,11 +123,7 @@ it.layer(
           Effect.flip,
         );
 
-        expect(error).toMatchObject({
-          _tag: "BootServiceDowngradeRefusedError",
-          installedVersion: "999.0.0",
-          targetVersion: packageJson.version,
-        });
+        expect(error).toMatchObject(expected);
         expect(installOptions).toEqual([]);
       }),
   );
@@ -120,6 +137,12 @@ it.layer(
       installed: false,
       env: "T3CODE_HOST=::\n",
       expected: "T3CODE_HOST=::\n",
+    },
+    {
+      label: "a quoted multiline value",
+      installed: false,
+      env: 'CUSTOM="first\nT3CODE_LAN=example\nlast"\n',
+      expected: 'CUSTOM="first\nT3CODE_LAN=example\nlast"\nT3CODE_LAN=false\n',
     },
   ])("install keeps $label off the local network only when it is new", (input) =>
     Effect.gen(function* () {
@@ -135,11 +158,14 @@ it.layer(
         Layer.succeed(BootService.BootService, service),
       );
 
-      yield* Command.runWith(serviceCommand, { version: packageJson.version })([
+      const [lines, up] = yield* Command.runWith(serviceCommand, { version: packageJson.version })([
         "install",
         "--base-dir",
         baseDir,
       ]).pipe(
+        Effect.andThen(
+          Effect.all([TestConsole.logLines, resolveHostCliCommand("up", ["--base-dir", baseDir])]),
+        ),
         Effect.provideService(HostProcess.Environment, {}),
         Effect.provide(
           Layer.mergeAll(
@@ -149,6 +175,9 @@ it.layer(
         ),
       );
       expect(yield* fs.readFileString(`${baseDir}/service.env`)).toBe(input.expected);
+      expect(lines.map(String).filter((line) => line.includes("other devices"))).toEqual(
+        input.installed ? [] : [`Run \`${up.command}\` to choose how your other devices reach it.`],
+      );
     }),
   );
 
@@ -222,6 +251,55 @@ it.layer(
   );
 
   it.effect.each([
+    {
+      label: "a missing service",
+      status: { ...status, installed: false },
+      hint: "service install",
+      args: [],
+    },
+    { label: "a newer service", status: newerServiceStatus, hint: "update", args: ["999.0.0"] },
+    {
+      label: "a stopped service",
+      status: { ...status, problems: ["service-stopped"] as const },
+      hint: "service install",
+      args: [],
+    },
+    {
+      label: "a restart-pending service",
+      status: { ...status, problems: ["restart-pending"] as const },
+      hint: "service restart",
+      args: [],
+    },
+  ])("status of $label names its next step with --base-dir", (input) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-cli-test-" });
+      vi.spyOn(BootService, "layer").mockReturnValue(
+        Layer.succeed(BootService.BootService, makeTestService(input.status).service),
+      );
+
+      const [lines, next] = yield* Command.runWith(serviceCommand, {
+        version: packageJson.version,
+      })(["status", "--base-dir", baseDir]).pipe(
+        Effect.andThen(
+          Effect.all([
+            TestConsole.logLines,
+            resolveHostCliCommand(input.hint, ["--base-dir", baseDir, ...input.args]),
+          ]),
+        ),
+        Effect.provideService(HostProcess.Environment, {}),
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+            Layer.fresh(TestConsole.layer),
+          ),
+        ),
+      );
+      expect(lines.join("\n")).toContain(`\`${next.command}\``);
+    }),
+  );
+
+  it.effect.each([
     { label: "this home's service", otherHome: false, unreadable: false, removed: [true] },
     { label: "another home's service", otherHome: true, unreadable: false, removed: [] },
     { label: "an unreadable service", otherHome: false, unreadable: true, removed: [true] },
@@ -261,7 +339,7 @@ it.layer(
         ),
       );
       expect(uninstalls).toEqual(input.removed);
-      expect(output).toContain(input.otherHome ? "another T3 home" : "Removed");
+      expect(output).toContain(input.otherHome ? "--base-dir '/home/me/.t3'" : "Removed");
     }),
   );
 });

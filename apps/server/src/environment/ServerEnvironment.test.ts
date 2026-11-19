@@ -19,6 +19,7 @@ import {
   RELAY_URL_SECRET,
 } from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
+import { KoManagedDeployment } from "../koDeployment.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
 
 const layerServerEnvironment = (baseDir: string) =>
@@ -121,6 +122,82 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
           threadAutoSettlementScope: true,
         });
       }
+    }),
+  );
+  it.effect.each([
+    {
+      desktopAppUpdate: false,
+      koManaged: false,
+      selfUpdate: "desktop-managed",
+      advertised: undefined,
+    },
+    { desktopAppUpdate: true, koManaged: false, selfUpdate: "desktop-managed", advertised: true },
+    // A KO deployment's external manager owns updates, so nothing is advertised.
+    { desktopAppUpdate: true, koManaged: true, selfUpdate: undefined, advertised: undefined },
+  ])(
+    "advertises desktop app updates only when the desktop can install them ($desktopAppUpdate, KO $koManaged)",
+    ({ desktopAppUpdate, koManaged, selfUpdate, advertised }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped();
+        const config = yield* makeServerConfig(baseDir);
+        yield* fs.makeDirectory(config.stateDir, { recursive: true });
+        const descriptor = yield* Effect.gen(function* () {
+          const environment = yield* ServerEnvironment.ServerEnvironment;
+          return yield* environment.getDescriptor;
+        }).pipe(
+          Effect.provide(
+            ServerEnvironment.layer.pipe(
+              Layer.provide(layerEmptySecretStore),
+              Layer.provide(
+                ServerConfig.layer({
+                  ...config,
+                  mode: "desktop",
+                  desktopTelemetryControlFd: 5,
+                  desktopAppUpdate,
+                }),
+              ),
+            ),
+          ),
+          Effect.provideService(HostProcess.Environment, {}),
+          Effect.provideService(KoManagedDeployment, koManaged),
+        );
+        const capabilities = descriptor.capabilities;
+        expect({
+          serverSelfUpdate: capabilities.serverSelfUpdate,
+          desktopAppUpdate: capabilities.desktopAppUpdate,
+          desktopAppChannelSwitch: capabilities.desktopAppChannelSwitch,
+          serverSelfUpdateProgress: capabilities.serverSelfUpdateProgress,
+        }).toEqual({
+          serverSelfUpdate: selfUpdate,
+          desktopAppUpdate: advertised,
+          desktopAppChannelSwitch: advertised,
+          serverSelfUpdateProgress: advertised,
+        });
+      }),
+  );
+  it.effect.each([
+    { platform: "darwin", architecture: "arm64", supported: true },
+    { platform: "linux", architecture: "x64", supported: true },
+    { platform: "linux", architecture: "x64", libc: "musl", supported: false },
+    { platform: "win32", architecture: "arm64", supported: false },
+    { platform: "linux", architecture: "arm", supported: false },
+  ] as const)("advertises voice transcription on $platform-$architecture: $supported", (host) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-speech-test-",
+      });
+      const descriptor = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        return yield* serverEnvironment.getDescriptor;
+      }).pipe(
+        Effect.provide(layerServerEnvironment(baseDir)),
+        Effect.provideService(HostProcess.Platform, host.platform),
+        Effect.provideService(HostProcess.Architecture, host.architecture),
+        Effect.provideService(HostProcess.LinuxLibc, "libc" in host ? host.libc : "gnu"),
+      );
+      expect(descriptor.capabilities.voiceTranscription).toBe(host.supported);
     }),
   );
   it.effect.each([
